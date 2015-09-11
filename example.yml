@@ -1,10 +1,18 @@
-# bind to this address to accept new TLS connections
-bind_addr: ":8081"
+bind_addr: ":443"
 
 frontends:
-  # connections with SNI of "v1.example.com" are handled by this block,
-  # they are proxied to port 4443 on localhost
-  2ip.ru:
+  pandora.com:
     backends:
-      -
-        addr: "2ip.ru"
+      - addr: "pandora.com"
+  rdio.com:
+      backends:
+      - addr: "rdio.com"
+  2ip.ru:
+      backends:
+      - addr: "2ip.ru"
+  www.whatismyip.com:
+      backends:
+      - addr: "www.whatismyip.com"
+  '*.2ip.ru':
+    backends:
+      - addr: "2ip.ru"
