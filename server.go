@@ -244,7 +244,7 @@ func parseConfig(configBuf []byte, loadTLS loadTLSConfigFn) (config *Configurati
 		return
 	}
 
-	config.BindPort = strconv.Atoi(strings.Split(config.BindAddr, ":")[1])
+	config.BindPort = strings.Split(config.BindAddr, ":")[1]
 
 	if len(config.Frontends) == 0 {
 		err = fmt.Errorf("You must specify at least one frontend")
