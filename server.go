@@ -11,6 +11,8 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -44,6 +46,7 @@ type Frontend struct {
 }
 
 type Configuration struct {
+	BindPort        string
 	BindAddr        string               `yaml:"bind_addr"`
 	Frontends       map[string]*Frontend `yaml:"frontends"`
 	defaultFrontend *Frontend
@@ -139,6 +142,7 @@ func (s *Server) runFrontend(name string, front *Frontend, l net.Listener) {
 			}
 			return
 		}
+
 		s.Printf("Accepted new connection for %v from %v", name, conn.RemoteAddr())
 
 		// proxy the connection to an backend
@@ -154,9 +158,8 @@ func (s *Server) proxyConnection(c net.Conn, front *Frontend) (err error) {
 
 	// pick the backend
 	backend := front.strategy.NextBackend()
-
 	// dial the backend
-	upConn, err := net.DialTimeout("tcp", backend.Addr, time.Duration(backend.ConnectTimeout)*time.Millisecond)
+	upConn, err := net.DialTimeout("tcp", backend.Addr+s.Configuration.BindPort, time.Duration(backend.ConnectTimeout)*time.Millisecond)
 	if err != nil {
 		s.Printf("Failed to dial backend connection %v: %v", backend.Addr, err)
 		c.Close()
@@ -240,6 +243,8 @@ func parseConfig(configBuf []byte, loadTLS loadTLSConfigFn) (config *Configurati
 		err = fmt.Errorf("You must specify a bind_addr")
 		return
 	}
+
+	config.BindPort = strconv.Atoi(strings.Split(config.BindAddr, ":")[1])
 
 	if len(config.Frontends) == 0 {
 		err = fmt.Errorf("You must specify at least one frontend")
