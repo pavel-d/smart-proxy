@@ -7,4 +7,4 @@ frontends:
   2ip.ru:
     backends:
       -
-        addr: "2ip.ru:443"
+        addr: "2ip.ru"
