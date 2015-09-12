@@ -1,4 +1,7 @@
-bind_addr: ":443"
+listeners:
+  - https: true
+    bind_addr: ":8080"
+  - bind_addr: ":8081"
 
 frontends:
   pandora.com:

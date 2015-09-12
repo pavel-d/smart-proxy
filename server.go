@@ -45,8 +45,7 @@ type Frontend struct {
 }
 
 type Configuration struct {
-	BindPort        string
-	BindAddr        string               `yaml:"bind_addr"`
+	ListenersConfig []ListenerConfig     `yaml:"listeners"`
 	Frontends       map[string]*Frontend `yaml:"frontends"`
 	defaultFrontend *Frontend
 }
@@ -57,20 +56,40 @@ type Server struct {
 	wait sync.WaitGroup
 
 	// these are for easier testing
-	mux   *vhost.TLSMuxer
-	ready chan int
+	mux            Muxer
+	ready          chan int
+	Https          bool
+	ListenerConfig ListenerConfig
+}
+
+type ListenerConfig struct {
+	Https    bool   `yaml:"https"`
+	BindAddr string `yaml:"bind_addr"`
+	BindPort string
+}
+
+type Muxer interface {
+	Listen(string) (net.Listener, error)
+	NextError() (net.Conn, error)
 }
 
 func (s *Server) Run() error {
-	// bind a port to handle TLS connections
-	l, err := net.Listen("tcp", s.Configuration.BindAddr)
+	// bind a port to handle TLS/HTTP connections
+	l, err := net.Listen("tcp", s.ListenerConfig.BindAddr)
 	if err != nil {
 		return err
 	}
 	s.Printf("Serving connections on %v", l.Addr())
 
 	// start muxing on it
-	s.mux, err = vhost.NewTLSMuxer(l, muxTimeout)
+	if s.Https {
+		s.Logger.Println("Starting HTTPS proxy")
+		s.mux, err = vhost.NewTLSMuxer(l, muxTimeout)
+	} else {
+		s.Logger.Println("Starting HTTP proxy")
+		s.mux, err = vhost.NewHTTPMuxer(l, muxTimeout)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -158,7 +177,7 @@ func (s *Server) proxyConnection(c net.Conn, front *Frontend) (err error) {
 	// pick the backend
 	backend := front.strategy.NextBackend()
 	// dial the backend
-	upConn, err := net.DialTimeout("tcp", backend.Addr, time.Duration(backend.ConnectTimeout)*time.Millisecond)
+	upConn, err := net.DialTimeout("tcp", backend.Addr+":"+s.ListenerConfig.BindPort, time.Duration(backend.ConnectTimeout)*time.Millisecond)
 	if err != nil {
 		s.Printf("Failed to dial backend connection %v: %v", backend.Addr, err)
 		c.Close()
@@ -238,12 +257,13 @@ func parseConfig(configBuf []byte, loadTLS loadTLSConfigFn) (config *Configurati
 	}
 
 	// configuration validation / normalization
-	if config.BindAddr == "" {
-		err = fmt.Errorf("You must specify a bind_addr")
-		return
+	for _, listener := range config.ListenersConfig {
+		if listener.BindAddr == "" {
+			err = fmt.Errorf("You must specify a bind_addr")
+			return
+		}
+		listener.BindPort = strings.Split(listener.BindAddr, ":")[1]
 	}
-
-	config.BindPort = strings.Split(config.BindAddr, ":")[1]
 
 	if len(config.Frontends) == 0 {
 		err = fmt.Errorf("You must specify at least one frontend")
@@ -273,8 +293,6 @@ func parseConfig(configBuf []byte, loadTLS loadTLSConfigFn) (config *Configurati
 				err = fmt.Errorf("You must specify an addr for each backend on frontend '%v'", name)
 				return
 			}
-
-			back.Addr = back.Addr + ":" + config.BindPort
 		}
 
 		if front.TLSCrt != "" || front.TLSKey != "" {
@@ -284,7 +302,6 @@ func parseConfig(configBuf []byte, loadTLS loadTLSConfigFn) (config *Configurati
 			}
 		}
 	}
-
 	return
 }
 
@@ -321,16 +338,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	// run server
-	s := &Server{
-		Configuration: config,
-		Logger:        log.New(os.Stdout, "slt ", log.LstdFlags|log.Lshortfile),
+	var completed sync.WaitGroup
+	completed.Add(len(config.ListenersConfig))
+
+	for _, listener := range config.ListenersConfig {
+
+		// run server
+		server := &Server{
+			Configuration:  config,
+			Logger:         log.New(os.Stdout, "unlocker-proxy ", log.LstdFlags|log.Lshortfile),
+			ListenerConfig: listener,
+		}
+		// this blocks unless there's a startup error
+		go func(server *Server) {
+			fmt.Println(server.ListenerConfig)
+			err = server.Run()
+			if err != nil {
+				fmt.Printf("Failed to start server %s: %v\n", listener, err)
+			}
+			completed.Done()
+		}(server)
 	}
 
-	// this blocks unless there's a startup error
-	err = s.Run()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start slt: %v\n", err)
-		os.Exit(1)
-	}
+	completed.Wait()
 }
