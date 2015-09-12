@@ -36,9 +36,8 @@ type Frontend struct {
 	Backends []Backend `yaml:"backends"`
 	Strategy string    `yaml:"strategy"`
 	TLSCrt   string    `yaml:"tls_crt"`
-	mux      *vhost.TLSMuxer
-	TLSKey   string `yaml:"tls_key"`
-	Default  bool   `yaml:"default"`
+	TLSKey   string    `yaml:"tls_key"`
+	Default  bool      `yaml:"default"`
 
 	strategy  BackendStrategy `yaml:"-"`
 	tlsConfig *tls.Config     `yaml:"-"`
@@ -56,9 +55,7 @@ type Server struct {
 	wait sync.WaitGroup
 
 	// these are for easier testing
-	mux Muxer
-	// httpMux        *vhost.HTTPMuxer
-	// tlsMux         *vhost.TLSMuxer
+	mux            Muxer
 	ready          chan int
 	ListenerConfig ListenerConfig
 }
@@ -76,14 +73,19 @@ type Muxer interface {
 
 func (s *Server) Run() error {
 	// bind a port to handle TLS/HTTP connections
-	s.Logger.Printf("Proxy port: %v", s.ListenerConfig.BindPort)
 	l, err := net.Listen("tcp", s.ListenerConfig.BindAddr)
 	if err != nil {
 		return err
 	}
 	s.Printf("Serving connections on %v", l.Addr())
 
-	s.mux, err = vhost.NewTLSMuxer(l, muxTimeout)
+	if s.ListenerConfig.Https {
+		s.Logger.Println("Initializing HTTPS multiplexer")
+		s.mux, err = vhost.NewTLSMuxer(l, muxTimeout)
+	} else {
+		s.Logger.Println("Initializing HTTP multiplexer")
+		s.mux, err = vhost.NewHTTPMuxer(l, muxTimeout)
+	}
 
 	if err != nil {
 		return err
