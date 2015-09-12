@@ -76,6 +76,7 @@ type Muxer interface {
 
 func (s *Server) Run() error {
 	// bind a port to handle TLS/HTTP connections
+	s.Logger.Printf("Proxy port: %v", s.ListenerConfig.BindPort)
 	l, err := net.Listen("tcp", s.ListenerConfig.BindAddr)
 	if err != nil {
 		return err
@@ -170,11 +171,8 @@ func (s *Server) proxyConnection(c net.Conn, front *Frontend) (err error) {
 
 	// pick the backend
 	backend := front.strategy.NextBackend()
-	s.Logger.Printf("Picked backend: %v", backend)
 	// dial the backend
-	s.Logger.Printf("About to dial upstream: %v:%v, timeout: %v", backend.Addr, s.ListenerConfig.BindPort, backend.ConnectTimeout)
 	upConn, err := net.DialTimeout("tcp", backend.Addr+":"+s.ListenerConfig.BindPort, time.Duration(backend.ConnectTimeout)*time.Millisecond)
-	s.Logger.Println("YAY!")
 	if err != nil {
 		s.Printf("Failed to dial backend connection %v: %v", backend.Addr, err)
 		c.Close()
@@ -254,12 +252,12 @@ func parseConfig(configBuf []byte, loadTLS loadTLSConfigFn) (config *Configurati
 	}
 
 	// configuration validation / normalization
-	for _, listener := range config.ListenersConfig {
+	for idx, listener := range config.ListenersConfig {
 		if listener.BindAddr == "" {
 			err = fmt.Errorf("You must specify a bind_addr")
 			return
 		}
-		listener.BindPort = strings.Split(listener.BindAddr, ":")[1]
+		config.ListenersConfig[idx].BindPort = strings.Split(listener.BindAddr, ":")[1]
 	}
 
 	if len(config.Frontends) == 0 {
