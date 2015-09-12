@@ -1,30 +1,23 @@
-package main
+package proxy
 
 import (
 	"crypto/tls"
-	"flag"
-	"fmt"
 	vhost "github.com/inconshreveable/go-vhost"
 	"io"
-	"io/ioutil"
-	"launchpad.net/goyaml"
 	"log"
 	"net"
-	"os"
-	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	muxTimeout            = 10 * time.Second
-	defaultConnectTimeout = 10000 // milliseconds
+	muxTimeout = 10 * time.Second
 )
 
-type loadTLSConfigFn func(crtPath, keyPath string) (*tls.Config, error)
+type LoadTLSConfigFn func(crtPath, keyPath string) (*tls.Config, error)
 
 type Options struct {
-	configPath string
+	ConfigPath string
 }
 
 type Backend struct {
@@ -40,13 +33,13 @@ type Frontend struct {
 	Default  bool      `yaml:"default"`
 
 	strategy  BackendStrategy `yaml:"-"`
-	tlsConfig *tls.Config     `yaml:"-"`
+	TlsConfig *tls.Config     `yaml:"-"`
 }
 
 type Configuration struct {
 	ListenersConfig []ListenerConfig     `yaml:"listeners"`
 	Frontends       map[string]*Frontend `yaml:"frontends"`
-	defaultFrontend *Frontend
+	DefaultFrontend *Frontend
 }
 
 type Server struct {
@@ -116,8 +109,8 @@ func (s *Server) Run() error {
 					continue
 				}
 			} else {
-				if _, ok := err.(vhost.NotFound); ok && s.defaultFrontend != nil {
-					go s.proxyConnection(conn, s.defaultFrontend)
+				if _, ok := err.(vhost.NotFound); ok && s.DefaultFrontend != nil {
+					go s.proxyConnection(conn, s.DefaultFrontend)
 				} else {
 					s.Printf("Failed to mux connection from %v, error: %v", conn.RemoteAddr(), err)
 					// XXX: respond with valid TLS close messages
@@ -167,8 +160,8 @@ func (s *Server) runFrontend(name string, front *Frontend, l net.Listener) {
 
 func (s *Server) proxyConnection(c net.Conn, front *Frontend) (err error) {
 	// unwrap if tls cert/key was specified
-	if front.tlsConfig != nil {
-		c = tls.Server(c, front.tlsConfig)
+	if front.TlsConfig != nil {
+		c = tls.Server(c, front.TlsConfig)
 	}
 
 	// pick the backend
@@ -224,85 +217,7 @@ func (s *RoundRobinStrategy) NextBackend() Backend {
 	}
 }
 
-func parseArgs() (*Options, error) {
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s <config file>\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "%s is a simple TLS reverse proxy that can multiplex TLS connections\n"+
-			"by inspecting the SNI extension on each incoming connection. This\n"+
-			"allows you to accept connections to many different backend TLS\n"+
-			"applications on a single port.\n\n"+
-			"%s takes a single argument: the path to a YAML configuration file.\n\n", os.Args[0], os.Args[0])
-	}
-	flag.Parse()
-
-	if len(flag.Args()) != 1 {
-		return nil, fmt.Errorf("You must specify a single argument, the path to the configuration file.")
-	}
-
-	return &Options{
-		configPath: flag.Arg(0),
-	}, nil
-
-}
-
-func parseConfig(configBuf []byte, loadTLS loadTLSConfigFn) (config *Configuration, err error) {
-	// deserialize/parse the config
-	config = new(Configuration)
-	if err = goyaml.Unmarshal(configBuf, &config); err != nil {
-		err = fmt.Errorf("Error parsing configuration file: %v", err)
-		return
-	}
-
-	// configuration validation / normalization
-	for idx, listener := range config.ListenersConfig {
-		if listener.BindAddr == "" {
-			err = fmt.Errorf("You must specify a bind_addr")
-			return
-		}
-		config.ListenersConfig[idx].BindPort = strings.Split(listener.BindAddr, ":")[1]
-	}
-
-	if len(config.Frontends) == 0 {
-		err = fmt.Errorf("You must specify at least one frontend")
-		return
-	}
-
-	for name, front := range config.Frontends {
-		if len(front.Backends) == 0 {
-			err = fmt.Errorf("You must specify at least one backend for frontend '%v'", name)
-			return
-		}
-
-		if front.Default {
-			if config.defaultFrontend != nil {
-				err = fmt.Errorf("Only one frontend may be the default")
-				return
-			}
-			config.defaultFrontend = front
-		}
-
-		for _, back := range front.Backends {
-			if back.ConnectTimeout == 0 {
-				back.ConnectTimeout = defaultConnectTimeout
-			}
-
-			if back.Addr == "" {
-				err = fmt.Errorf("You must specify an addr for each backend on frontend '%v'", name)
-				return
-			}
-		}
-
-		if front.TLSCrt != "" || front.TLSKey != "" {
-			if front.tlsConfig, err = loadTLS(front.TLSCrt, front.TLSKey); err != nil {
-				err = fmt.Errorf("Failed to load TLS configuration for frontend '%v': %v", name, err)
-				return
-			}
-		}
-	}
-	return
-}
-
-func loadTLSConfig(crtPath, keyPath string) (*tls.Config, error) {
+func LoadTLSConfig(crtPath, keyPath string) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(crtPath, keyPath)
 	if err != nil {
 		return nil, err
@@ -311,50 +226,4 @@ func loadTLSConfig(crtPath, keyPath string) (*tls.Config, error) {
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
 	}, nil
-}
-
-func main() {
-	// parse command line options
-	opts, err := parseArgs()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	// read configuration file
-	configBuf, err := ioutil.ReadFile(opts.configPath)
-	if err != nil {
-		fmt.Printf("Failed to read configuration file %s: %v\n", opts.configPath, err)
-		os.Exit(1)
-	}
-
-	// parse configuration file
-	config, err := parseConfig(configBuf, loadTLSConfig)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	var completed sync.WaitGroup
-	completed.Add(len(config.ListenersConfig))
-
-	for _, listener := range config.ListenersConfig {
-
-		// run server
-		server := &Server{
-			Configuration:  config,
-			Logger:         log.New(os.Stdout, "unlocker-proxy ", log.LstdFlags|log.Lshortfile),
-			ListenerConfig: listener,
-		}
-		// this blocks unless there's a startup error
-		go func(server *Server) {
-			err = server.Run()
-			if err != nil {
-				fmt.Printf("Failed to start server %s: %v\n", listener, err)
-			}
-			completed.Done()
-		}(server)
-	}
-
-	completed.Wait()
 }
