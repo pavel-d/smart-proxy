@@ -174,11 +174,7 @@ func (s *Server) proxyConnection(c net.Conn, front *Frontend) (err error) {
 	// pick the backend
 	backend := front.strategy.NextBackend()
 	// dial the backend
-	tlsConn, _ := vhost.TLS(c)
-	remoteHost := tlsConn.Host()
-	s.Printf("Dialing remoteHost %v", remoteHost)
-	s.Printf("Dialing backendAddr %v", backend.Addr)
-	upConn, err := net.DialTimeout("tcp", remoteHost+":"+s.ListenerConfig.BindPort, time.Duration(backend.ConnectTimeout)*time.Millisecond)
+	upConn, err := net.DialTimeout("tcp", backend.Addr+":"+s.ListenerConfig.BindPort, time.Duration(backend.ConnectTimeout)*time.Millisecond)
 	if err != nil {
 		s.Printf("Failed to dial backend connection %v: %v", backend.Addr, err)
 		c.Close()
