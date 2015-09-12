@@ -56,9 +56,10 @@ type Server struct {
 	wait sync.WaitGroup
 
 	// these are for easier testing
-	mux            Muxer
+	// mux            Muxer
+	httpMux        *vhost.HTTPMuxer
+	tlsMux         *vhost.TLSMuxer
 	ready          chan int
-	Https          bool
 	ListenerConfig ListenerConfig
 }
 
@@ -84,10 +85,10 @@ func (s *Server) Run() error {
 	// start muxing on it
 	if s.ListenerConfig.Https {
 		s.Logger.Println("Starting HTTPS proxy")
-		s.mux, err = vhost.NewTLSMuxer(l, muxTimeout)
+		s.tlsMux, err = vhost.NewTLSMuxer(l, muxTimeout)
 	} else {
 		s.Logger.Println("Starting HTTP proxy")
-		s.mux, err = vhost.NewHTTPMuxer(l, muxTimeout)
+		s.httpMux, err = vhost.NewHTTPMuxer(l, muxTimeout)
 	}
 
 	if err != nil {
@@ -99,7 +100,14 @@ func (s *Server) Run() error {
 
 	// setup muxing for each frontend
 	for name, front := range s.Frontends {
-		fl, err := s.mux.Listen(name)
+		var fl net.Listener
+		var err error
+		if s.ListenerConfig.Https {
+			fl, err = s.tlsMux.Listen(name)
+		} else {
+			fl, err = s.httpMux.Listen(name)
+		}
+
 		if err != nil {
 			return err
 		}
@@ -109,8 +117,13 @@ func (s *Server) Run() error {
 	// custom error handler so we can log errors
 	go func() {
 		for {
-			conn, err := s.mux.NextError()
-
+			var conn net.Conn
+			var err error
+			if s.ListenerConfig.Https {
+				conn, err = s.tlsMux.NextError()
+			} else {
+				conn, err = s.httpMux.NextError()
+			}
 			if conn == nil {
 				s.Printf("Failed to mux next connection, error: %v", err)
 				if _, ok := err.(vhost.Closed); ok {
