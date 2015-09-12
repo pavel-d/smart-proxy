@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	muxTimeout = 10 * time.Second
+	muxTimeout            = 10 * time.Second
+	DefaultConnectTimeout = 10000 // milliseconds
 )
 
 type LoadTLSConfigFn func(crtPath, keyPath string) (*tls.Config, error)
+type Middleware func(c net.Conn, front *Frontend, back *Backend) *Backend
 
 type Options struct {
 	ConfigPath string
@@ -45,8 +47,8 @@ type Configuration struct {
 type Server struct {
 	*log.Logger
 	*Configuration
-	wait sync.WaitGroup
-
+	wait       sync.WaitGroup
+	Middleware Middleware
 	// these are for easier testing
 	mux            Muxer
 	ready          chan int
@@ -166,6 +168,10 @@ func (s *Server) proxyConnection(c net.Conn, front *Frontend) (err error) {
 
 	// pick the backend
 	backend := front.strategy.NextBackend()
+
+	if s.Middleware != nil {
+		backend = *s.Middleware(c, front, &backend)
+	}
 	// dial the backend
 	upConn, err := net.DialTimeout("tcp", backend.Addr+":"+s.ListenerConfig.BindPort, time.Duration(backend.ConnectTimeout)*time.Millisecond)
 	if err != nil {
