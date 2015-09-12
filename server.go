@@ -170,6 +170,7 @@ func (s *Server) proxyConnection(c net.Conn, front *Frontend) (err error) {
 
 	// pick the backend
 	backend := front.strategy.NextBackend()
+	s.Logger.Printf("Picked backend: %v", backend)
 	// dial the backend
 	upConn, err := net.DialTimeout("tcp", backend.Addr+":"+s.ListenerConfig.BindPort, time.Duration(backend.ConnectTimeout)*time.Millisecond)
 	if err != nil {
