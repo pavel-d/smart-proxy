@@ -82,7 +82,7 @@ func (s *Server) Run() error {
 	s.Printf("Serving connections on %v", l.Addr())
 
 	// start muxing on it
-	if s.Https {
+	if s.ListenerConfig.Https {
 		s.Logger.Println("Starting HTTPS proxy")
 		s.mux, err = vhost.NewTLSMuxer(l, muxTimeout)
 	} else {
@@ -351,7 +351,6 @@ func main() {
 		}
 		// this blocks unless there's a startup error
 		go func(server *Server) {
-			fmt.Println(server.ListenerConfig)
 			err = server.Run()
 			if err != nil {
 				fmt.Printf("Failed to start server %s: %v\n", listener, err)
