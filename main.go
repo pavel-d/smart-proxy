@@ -14,6 +14,7 @@ import (
 )
 
 var Redis *redis.Client
+var AuthBackendHost string
 
 func main() {
 	// parse command line options
@@ -37,6 +38,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	AuthBackendHost = os.Getenv("AUTH_BACKEND_HOST")
+
+	if AuthBackendHost == "" {
+		fmt.Println("AUTH_BACKEND_HOST env var is not set")
+		os.Exit(1)
+	}
+
 	// Init redis
 	Redis = newRedisClient()
 
@@ -48,9 +56,9 @@ func main() {
 		// run server
 		proxyServer := &proxy.Server{
 			Configuration:  config,
-			Logger:         log.New(os.Stdout, "unlocker-proxy ", log.LstdFlags|log.Lshortfile),
+			Logger:         log.New(os.Stdout, "smart-proxy ", log.LstdFlags|log.Lshortfile),
 			ListenerConfig: listener,
-			Interceptor:    getInterceptor(Redis, &proxy.Backend{"46.101.255.49", 10}),
+			Interceptor:    getInterceptor(Redis, &proxy.Backend{AuthBackendHost, 10}),
 		}
 		// this blocks unless there's a startup error
 		go func(server *proxy.Server) {
