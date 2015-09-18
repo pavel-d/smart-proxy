@@ -21,11 +21,15 @@ func (t *TrafCounter) Count(host string, remote net.Addr, bytesCount int64) {
 	_, err := t.Redis.IncrBy(TraffStatsRedisClientKey+IPAddrFromRemoteAddr(remote), bytesCount).Result()
 	if err != nil {
 		log.Printf("Failed to save trafstats for %v", TraffStatsRedisClientKey+IPAddrFromRemoteAddr(remote))
+	} else {
+		log.Printf("Increment traffic counter for %v: ,%v", TraffStatsRedisClientKey+IPAddrFromRemoteAddr(remote), bytesCount)
 	}
 
 	_, err = t.Redis.IncrBy(TraffStatsRedisRemoteKey+host, bytesCount).Result()
 	if err != nil {
 		log.Printf("Failed to save trafstats for %v", TraffStatsRedisRemoteKey+host)
+	} else {
+		log.Printf("Increment traffic counter for %v: ,%v", TraffStatsRedisRemoteKey+host, bytesCount)
 	}
 }
 
