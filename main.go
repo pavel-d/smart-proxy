@@ -58,7 +58,7 @@ func main() {
 			Configuration:  config,
 			Logger:         log.New(os.Stdout, "smart-proxy ", log.LstdFlags|log.Lshortfile),
 			ListenerConfig: listener,
-			Interceptor:    getInterceptor(Redis, &proxy.Backend{AuthBackendHost, 10}),
+			Interceptor:    getInterceptor(Redis, &proxy.Backend{AuthBackendHost, proxy.DefaultConnectTimeout}),
 		}
 		// this blocks unless there's a startup error
 		go func(server *proxy.Server) {
