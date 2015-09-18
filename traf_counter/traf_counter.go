@@ -16,8 +16,8 @@ type TrafCounter struct {
 }
 
 func (t *TrafCounter) Count(host string, remote net.Addr, bytesCount int64) {
-	t.Redis.IncrBy(TraffStatsRedisClientKey+IPAddrFromRemoteAddr(remote), bytesCount)
-	t.Redis.IncrBy(TraffStatsRedisRemoteKey+host, bytesCount)
+	t.Redis.IncrBy(TraffStatsRedisClientKey+IPAddrFromRemoteAddr(remote), bytesCount).Result()
+	t.Redis.IncrBy(TraffStatsRedisRemoteKey+host, bytesCount).Result()
 }
 
 func IPAddrFromRemoteAddr(addr net.Addr) string {
