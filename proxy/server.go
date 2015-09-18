@@ -3,10 +3,12 @@ package proxy
 import (
 	"crypto/tls"
 	vhost "github.com/inconshreveable/go-vhost"
+	"github.com/pavel-d/smart-proxy/traf_counter"
 	"io"
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -53,6 +55,7 @@ type Server struct {
 	mux            Muxer
 	ready          chan int
 	ListenerConfig ListenerConfig
+	TrafCounter    *traf_counter.TrafCounter
 }
 
 type ListenerConfig struct {
@@ -183,17 +186,21 @@ func (s *Server) proxyConnection(c net.Conn, front *Frontend) (err error) {
 	s.Printf("Initiated new connection to backend: %v %v", upConn.LocalAddr(), upConn.RemoteAddr())
 
 	// join the connections
-	s.joinConnections(c, upConn)
+	totalBytes := s.joinConnections(c, upConn)
+	s.TrafCounter.Count(backend.Addr, c.RemoteAddr(), totalBytes)
 	return
 }
 
-func (s *Server) joinConnections(c1 net.Conn, c2 net.Conn) {
+func (s *Server) joinConnections(c1 net.Conn, c2 net.Conn) int64 {
 	var wg sync.WaitGroup
+	var totalBytes int64
+
 	halfJoin := func(dst net.Conn, src net.Conn) {
 		defer wg.Done()
 		defer dst.Close()
 		defer src.Close()
 		n, err := io.Copy(dst, src)
+		atomic.AddInt64(&totalBytes, n)
 		s.Printf("Copy from %v to %v failed after %d bytes with error %v", src.RemoteAddr(), dst.RemoteAddr(), n, err)
 	}
 
@@ -202,6 +209,7 @@ func (s *Server) joinConnections(c1 net.Conn, c2 net.Conn) {
 	go halfJoin(c1, c2)
 	go halfJoin(c2, c1)
 	wg.Wait()
+	return totalBytes
 }
 
 type BackendStrategy interface {
