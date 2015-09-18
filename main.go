@@ -4,12 +4,16 @@ import (
 	"fmt"
 	"github.com/pavel-d/smart-proxy/proxy"
 	"github.com/pavel-d/smart-proxy/util"
+	"gopkg.in/redis.v3"
 	"io/ioutil"
 	"log"
 	"net"
 	"os"
+	"strings"
 	"sync"
 )
+
+var Redis *redis.Client
 
 func main() {
 	// parse command line options
@@ -33,6 +37,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Init redis
+	Redis = newRedisClient()
+
 	var completed sync.WaitGroup
 	completed.Add(len(config.ListenersConfig))
 
@@ -43,7 +50,7 @@ func main() {
 			Configuration:  config,
 			Logger:         log.New(os.Stdout, "unlocker-proxy ", log.LstdFlags|log.Lshortfile),
 			ListenerConfig: listener,
-			Middleware:     interceptor,
+			Interceptor:    getInterceptor(Redis, &proxy.Backend{"46.101.255.49", 10}),
 		}
 		// this blocks unless there's a startup error
 		go func(server *proxy.Server) {
@@ -58,7 +65,39 @@ func main() {
 	completed.Wait()
 }
 
-func interceptor(c net.Conn, front *proxy.Frontend, back *proxy.Backend) *proxy.Backend {
-	log.Printf("Hello from interceptor! %v is allowed", c.RemoteAddr())
-	return back
+func newRedisClient() *redis.Client {
+	redisCLient := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: os.Getenv("REDIS_PASSWORD"),
+		DB:       1,
+	})
+
+	return redisCLient
+}
+
+func ipAddrFromRemoteAddr(addr net.Addr) string {
+	s := addr.String()
+	idx := strings.LastIndex(s, ":")
+	if idx == -1 {
+		return s
+	}
+	return s[:idx]
+}
+
+func getInterceptor(redisClient *redis.Client, authBackend *proxy.Backend) proxy.Interceptor {
+	return func(c net.Conn, front *proxy.Frontend, back *proxy.Backend) *proxy.Backend {
+
+		ipAddr := ipAddrFromRemoteAddr(c.RemoteAddr())
+
+		result, _ := redisClient.Get(ipAddr).Result()
+
+		if result == "" {
+			log.Println("Anonymous")
+			return authBackend
+		} else {
+			log.Println("Authenticated")
+		}
+
+		return back
+	}
 }
