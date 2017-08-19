@@ -134,12 +134,13 @@ func (server *Server) runFrontend(host string, l net.Listener) {
 			return
 		}
 
-		tlsConn, res := conn.(vhost.TLSConn)
+		tlsConn, res := conn.(*vhost.TLSConn)
 		if res {
+			log.Printf("HUI")
 			host = tlsConn.Host()
 		}
 
-		httpConn, res := conn.(vhost.HTTPConn)
+		httpConn, res := conn.(*vhost.HTTPConn)
 		if res {
 			host = httpConn.Host()
 		}
