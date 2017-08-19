@@ -6,14 +6,14 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
 const (
 	muxTimeout            = 10 * time.Second
-	DefaultConnectTimeout = 10000 // milliseconds
+	DefaultConnectTimeout = 10 * time.Second
 )
 
 type Options struct {
@@ -28,7 +28,13 @@ type Backend struct {
 type Configuration struct {
 	ListenersConfig []ListenerConfig `yaml:"listeners"`
 	Upstreams       []string         `yaml:"upstreams"`
-	DefaultUpstream string           `yaml:"default_upstream"`
+	DefaultUpstream *DefaultUpstream `yaml:"default_upstream"`
+}
+
+type DefaultUpstream struct {
+	Host      string `yaml:"host"`
+	HttpPort  int    `yaml:"http_port"`
+	HttpsPort int    `yaml:"https_port"`
 }
 
 type Server struct {
@@ -96,8 +102,14 @@ func (server *Server) Run() error {
 					continue
 				}
 			} else {
-				if _, ok := err.(vhost.NotFound); ok && server.DefaultUpstream != "" {
-					go server.proxyConnection(conn, server.DefaultUpstream)
+				if _, ok := err.(vhost.NotFound); ok && server.DefaultUpstream != nil {
+					port := server.DefaultUpstream.HttpPort
+
+					if server.ListenerConfig.Https {
+						port = server.DefaultUpstream.HttpsPort
+					}
+
+					go server.proxyConnectionWithPort(conn, server.DefaultUpstream.Host, port)
 				} else {
 					server.Printf("Failed to mux connection from %v, error: %v", conn.RemoteAddr(), err)
 					// TODO: respond with valid TLS close messages
@@ -136,7 +148,6 @@ func (server *Server) runFrontend(host string, l net.Listener) {
 
 		tlsConn, res := conn.(*vhost.TLSConn)
 		if res {
-			log.Printf("HUI")
 			host = tlsConn.Host()
 		}
 
@@ -152,9 +163,9 @@ func (server *Server) runFrontend(host string, l net.Listener) {
 	}
 }
 
-func (server *Server) proxyConnection(c net.Conn, host string) (err error) {
-	backend := fmt.Sprintf("%s:%s", host, server.ListenerConfig.BindPort)
-	upConn, err := net.DialTimeout("tcp", backend, time.Duration(DefaultConnectTimeout)*time.Millisecond)
+func (server *Server) proxyConnectionWithPort(c net.Conn, host string, port int) (err error) {
+	backend := fmt.Sprintf("%s:%d", host, port)
+	upConn, err := net.DialTimeout("tcp", backend, DefaultConnectTimeout)
 
 	if err != nil {
 		server.Printf("Failed to dial backend connection %v: %v", host, err)
@@ -163,30 +174,35 @@ func (server *Server) proxyConnection(c net.Conn, host string) (err error) {
 	}
 
 	server.Printf("Initiated new connection to backend: %v %v", upConn.LocalAddr(), upConn.RemoteAddr())
-
-	totalBytes := server.joinConnections(c, upConn)
-	log.Printf("Stats: '%s' => '%s' transfered %d bytes", backend, c.RemoteAddr(), totalBytes)
+	server.joinConnections(c, upConn)
 
 	return
 }
 
-func (server *Server) joinConnections(c1 net.Conn, c2 net.Conn) int64 {
+func (server *Server) proxyConnection(c net.Conn, host string) (err error) {
+	port, _ := strconv.Atoi("-42")
+	return server.proxyConnectionWithPort(c, host, port)
+}
+
+func (server *Server) joinConnections(c1 net.Conn, c2 net.Conn) {
 	var wg sync.WaitGroup
-	var totalBytes int64
 
 	halfJoin := func(dst net.Conn, src net.Conn) {
 		defer wg.Done()
 		defer dst.Close()
 		defer src.Close()
 		n, err := io.Copy(dst, src)
-		atomic.AddInt64(&totalBytes, n)
-		server.Printf("Copy from %v to %v failed after %d bytes with error %v", src.RemoteAddr(), dst.RemoteAddr(), n, err)
+
+		if err != nil {
+			server.Printf("Copy from %v to %v failed after %d bytes with error %v", src.RemoteAddr(), dst.RemoteAddr(), n, err)
+		} else {
+			server.Printf("Copy from %v to %v finished after %d bytes", src.RemoteAddr(), dst.RemoteAddr(), n)
+		}
+
 	}
 
-	server.Printf("Joining connections: %v %v", c1.RemoteAddr(), c2.RemoteAddr())
 	wg.Add(2)
 	go halfJoin(c1, c2)
 	go halfJoin(c2, c1)
 	wg.Wait()
-	return totalBytes
 }

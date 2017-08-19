@@ -3,8 +3,10 @@ listeners:
   - bind_addr: ":8081"
     https: true
 
+default_upstream:
+  host: localhost
+  http_port: 8080
+  https_port: 8443
+
 upstreams:
   - 2ip.ru
-
-default_upstream:
-  - localhost
