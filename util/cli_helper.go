@@ -45,6 +45,12 @@ func ParseConfig(configBuf []byte) (config *proxy.Configuration, err error) {
 		config.ListenersConfig[idx].BindPort = strings.Split(listener.BindAddr, ":")[1]
 	}
 
+	for _, upstream := range config.Upstreams {
+		config.Upstreams = append(config.Upstreams, fmt.Sprintf("*.%s", upstream))
+	}
+
+	fmt.Println(config.Upstreams)
+
 	if len(config.Upstreams) == 0 {
 		err = fmt.Errorf("You must specify at least one frontend")
 		return
