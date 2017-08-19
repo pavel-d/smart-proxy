@@ -1,9 +1,8 @@
 package proxy
 
 import (
-	"crypto/tls"
+	"fmt"
 	vhost "github.com/inconshreveable/go-vhost"
-	"github.com/pavel-d/smart-proxy/traf_counter"
 	"io"
 	"log"
 	"net"
@@ -17,9 +16,6 @@ const (
 	DefaultConnectTimeout = 10000 // milliseconds
 )
 
-type LoadTLSConfigFn func(crtPath, keyPath string) (*tls.Config, error)
-type Interceptor func(c net.Conn, front *Frontend, back *Backend) *Backend
-
 type Options struct {
 	ConfigPath string
 }
@@ -29,33 +25,20 @@ type Backend struct {
 	ConnectTimeout int    `yaml:connect_timeout"`
 }
 
-type Frontend struct {
-	Backends []Backend `yaml:"backends"`
-	Strategy string    `yaml:"strategy"`
-	TLSCrt   string    `yaml:"tls_crt"`
-	TLSKey   string    `yaml:"tls_key"`
-	Default  bool      `yaml:"default"`
-
-	strategy  BackendStrategy `yaml:"-"`
-	TlsConfig *tls.Config     `yaml:"-"`
-}
-
 type Configuration struct {
-	ListenersConfig []ListenerConfig     `yaml:"listeners"`
-	Frontends       map[string]*Frontend `yaml:"frontends"`
-	DefaultFrontend *Frontend
+	ListenersConfig []ListenerConfig `yaml:"listeners"`
+	Upstreams       []string         `yaml:"upstreams"`
+	DefaultUpstream string           `yaml:"default_upstream"`
 }
 
 type Server struct {
 	*log.Logger
 	*Configuration
-	wait        sync.WaitGroup
-	Interceptor Interceptor
+	wait sync.WaitGroup
 	// these are for easier testing
 	mux            Muxer
 	ready          chan int
 	ListenerConfig ListenerConfig
-	TrafCounter    *traf_counter.TrafCounter
 }
 
 type ListenerConfig struct {
@@ -69,85 +52,79 @@ type Muxer interface {
 	NextError() (net.Conn, error)
 }
 
-func (s *Server) Run() error {
+func (server *Server) Run() error {
 	// bind a port to handle TLS/HTTP connections
-	l, err := net.Listen("tcp", s.ListenerConfig.BindAddr)
+	l, err := net.Listen("tcp", server.ListenerConfig.BindAddr)
 	if err != nil {
 		return err
 	}
-	s.Printf("Serving connections on %v", l.Addr())
+	server.Printf("Serving connections on %v", l.Addr())
 
-	if s.ListenerConfig.Https {
-		s.Logger.Println("Initializing HTTPS multiplexer")
-		s.mux, err = vhost.NewTLSMuxer(l, muxTimeout)
+	if server.ListenerConfig.Https {
+		server.Logger.Println("Initializing HTTPS multiplexer")
+		server.mux, err = vhost.NewTLSMuxer(l, muxTimeout)
 	} else {
-		s.Logger.Println("Initializing HTTP multiplexer")
-		s.mux, err = vhost.NewHTTPMuxer(l, muxTimeout)
+		server.Logger.Println("Initializing HTTP multiplexer")
+		server.mux, err = vhost.NewHTTPMuxer(l, muxTimeout)
 	}
 
 	if err != nil {
 		return err
 	}
 
-	// wait for all frontends to finish
-	s.wait.Add(len(s.Frontends))
+	// wait for all upstreams to finish
+	server.wait.Add(len(server.Configuration.Upstreams))
 
 	// setup muxing for each frontend
-	for name, front := range s.Frontends {
-		fl, err := s.mux.Listen(name)
+	for _, host := range server.Configuration.Upstreams {
+		fl, err := server.mux.Listen(host)
 
 		if err != nil {
 			return err
 		}
-		go s.runFrontend(name, front, fl)
+		go server.runFrontend(host, fl)
 	}
 
-	// custom error handler so we can log errors
 	go func() {
 		for {
-			conn, err := s.mux.NextError()
+			conn, err := server.mux.NextError()
 			if conn == nil {
-				s.Printf("Failed to mux next connection, error: %v", err)
+				server.Printf("Failed to mux next connection, error: %v", err)
 				if _, ok := err.(vhost.Closed); ok {
 					return
 				} else {
 					continue
 				}
 			} else {
-				if _, ok := err.(vhost.NotFound); ok && s.DefaultFrontend != nil {
-					go s.proxyConnection(conn, s.DefaultFrontend)
+				if _, ok := err.(vhost.NotFound); ok && server.DefaultUpstream != "" {
+					go server.proxyConnection(conn, server.DefaultUpstream)
 				} else {
-					s.Printf("Failed to mux connection from %v, error: %v", conn.RemoteAddr(), err)
-					// XXX: respond with valid TLS close messages
+					server.Printf("Failed to mux connection from %v, error: %v", conn.RemoteAddr(), err)
+					// TODO: respond with valid TLS close messages
 					conn.Close()
 				}
 			}
 		}
 	}()
 
-	// we're ready, signal it for testing
-	if s.ready != nil {
-		close(s.ready)
+	if server.ready != nil {
+		close(server.ready)
 	}
 
-	s.wait.Wait()
+	server.wait.Wait()
 
 	return nil
 }
 
-func (s *Server) runFrontend(name string, front *Frontend, l net.Listener) {
+func (server *Server) runFrontend(host string, l net.Listener) {
 	// mark finished when done so Run() can return
-	defer s.wait.Done()
+	defer server.wait.Done()
 
-	// always round-robin strategy for now
-	front.strategy = &RoundRobinStrategy{backends: front.Backends}
-
-	s.Printf("Handling connections to %v", name)
 	for {
 		// accept next connection to this frontend
 		conn, err := l.Accept()
 		if err != nil {
-			s.Printf("Failed to accept new connection for '%v': %v", conn.RemoteAddr())
+			server.Printf("Failed to accept new connection for '%v': %v", conn.RemoteAddr())
 			if e, ok := err.(net.Error); ok {
 				if e.Temporary() {
 					continue
@@ -156,42 +133,32 @@ func (s *Server) runFrontend(name string, front *Frontend, l net.Listener) {
 			return
 		}
 
-		s.Printf("Accepted new connection for %v from %v", name, conn.RemoteAddr())
+		server.Printf("Accepted new connection for %v from %v", host, conn.RemoteAddr())
 
 		// proxy the connection to an backend
-		go s.proxyConnection(conn, front)
+		go server.proxyConnection(conn, host)
 	}
 }
 
-func (s *Server) proxyConnection(c net.Conn, front *Frontend) (err error) {
-	// unwrap if tls cert/key was specified
-	if front.TlsConfig != nil {
-		c = tls.Server(c, front.TlsConfig)
-	}
+func (server *Server) proxyConnection(c net.Conn, host string) (err error) {
+	backend := fmt.Sprintf("%s:%s", host, server.ListenerConfig.BindPort)
+	upConn, err := net.DialTimeout("tcp", backend, time.Duration(DefaultConnectTimeout)*time.Millisecond)
 
-	// pick the backend
-	backend := front.strategy.NextBackend()
-
-	if s.Interceptor != nil {
-		backend = *s.Interceptor(c, front, &backend)
-	}
-
-	// dial the backend
-	upConn, err := net.DialTimeout("tcp", backend.Addr+":"+s.ListenerConfig.BindPort, time.Duration(backend.ConnectTimeout)*time.Millisecond)
 	if err != nil {
-		s.Printf("Failed to dial backend connection %v: %v", backend.Addr, err)
+		server.Printf("Failed to dial backend connection %v: %v", host, err)
 		c.Close()
 		return
 	}
-	s.Printf("Initiated new connection to backend: %v %v", upConn.LocalAddr(), upConn.RemoteAddr())
 
-	// join the connections
-	totalBytes := s.joinConnections(c, upConn)
-	s.TrafCounter.Count(backend.Addr, c.RemoteAddr(), totalBytes)
+	server.Printf("Initiated new connection to backend: %v %v", upConn.LocalAddr(), upConn.RemoteAddr())
+
+	totalBytes := server.joinConnections(c, upConn)
+	log.Printf("Stats: '%s' => '%s' transfered %d bytes", backend, c.RemoteAddr(), totalBytes)
+
 	return
 }
 
-func (s *Server) joinConnections(c1 net.Conn, c2 net.Conn) int64 {
+func (server *Server) joinConnections(c1 net.Conn, c2 net.Conn) int64 {
 	var wg sync.WaitGroup
 	var totalBytes int64
 
@@ -201,44 +168,13 @@ func (s *Server) joinConnections(c1 net.Conn, c2 net.Conn) int64 {
 		defer src.Close()
 		n, err := io.Copy(dst, src)
 		atomic.AddInt64(&totalBytes, n)
-		s.Printf("Copy from %v to %v failed after %d bytes with error %v", src.RemoteAddr(), dst.RemoteAddr(), n, err)
+		server.Printf("Copy from %v to %v failed after %d bytes with error %v", src.RemoteAddr(), dst.RemoteAddr(), n, err)
 	}
 
-	s.Printf("Joining connections: %v %v", c1.RemoteAddr(), c2.RemoteAddr())
+	server.Printf("Joining connections: %v %v", c1.RemoteAddr(), c2.RemoteAddr())
 	wg.Add(2)
 	go halfJoin(c1, c2)
 	go halfJoin(c2, c1)
 	wg.Wait()
 	return totalBytes
-}
-
-type BackendStrategy interface {
-	NextBackend() Backend
-}
-
-type RoundRobinStrategy struct {
-	backends []Backend
-	idx      int
-}
-
-func (s *RoundRobinStrategy) NextBackend() Backend {
-	n := len(s.backends)
-
-	if n == 1 {
-		return s.backends[0]
-	} else {
-		s.idx = (s.idx + 1) % n
-		return s.backends[s.idx]
-	}
-}
-
-func LoadTLSConfig(crtPath, keyPath string) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(crtPath, keyPath)
-	if err != nil {
-		return nil, err
-	}
-
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-	}, nil
 }

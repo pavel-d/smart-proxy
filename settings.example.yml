@@ -3,16 +3,8 @@ listeners:
   - bind_addr: ":8081"
     https: true
 
-frontends:
-  pandora.com:
-    backends:
-      - addr: "pandora.com"
-  rdio.com:
-      backends:
-      - addr: "rdio.com"
-  2ip.ru:
-      backends:
-      - addr: "2ip.ru"
-  www.whatismyip.com:
-      backends:
-      - addr: "www.whatismyip.com"
+upstreams:
+  - 2ip.ru
+
+default_upstream:
+  - localhost
