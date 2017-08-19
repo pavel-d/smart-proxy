@@ -2,7 +2,7 @@ package proxy
 
 import (
 	"fmt"
-	vhost "github.com/inconshreveable/go-vhost"
+	vhost "github.com/pavel-d/go-vhost"
 	"io"
 	"log"
 	"net"
@@ -123,6 +123,7 @@ func (server *Server) runFrontend(host string, l net.Listener) {
 	for {
 		// accept next connection to this frontend
 		conn, err := l.Accept()
+
 		if err != nil {
 			server.Printf("Failed to accept new connection for '%v': %v", conn.RemoteAddr())
 			if e, ok := err.(net.Error); ok {
@@ -131,6 +132,16 @@ func (server *Server) runFrontend(host string, l net.Listener) {
 				}
 			}
 			return
+		}
+
+		tlsConn, res := conn.(vhost.TLSConn)
+		if res {
+			host = tlsConn.Host()
+		}
+
+		httpConn, res := conn.(vhost.HTTPConn)
+		if res {
+			host = httpConn.Host()
 		}
 
 		server.Printf("Accepted new connection for %v from %v", host, conn.RemoteAddr())
