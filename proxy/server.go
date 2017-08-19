@@ -180,7 +180,7 @@ func (server *Server) proxyConnectionWithPort(c net.Conn, host string, port int)
 }
 
 func (server *Server) proxyConnection(c net.Conn, host string) (err error) {
-	port, _ := strconv.Atoi("-42")
+	port, _ := strconv.Atoi(server.ListenerConfig.BindPort)
 	return server.proxyConnectionWithPort(c, host, port)
 }
 
