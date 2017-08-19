@@ -168,7 +168,7 @@ func (server *Server) proxyConnectionWithPort(c net.Conn, host string, port int)
 	upConn, err := net.DialTimeout("tcp", backend, DefaultConnectTimeout)
 
 	if err != nil {
-		server.Printf("Failed to dial backend connection %v: %v", host, err)
+		server.Printf("Failed to dial backend connection %v: %v", backend, err)
 		c.Close()
 		return
 	}
